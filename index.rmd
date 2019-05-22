@@ -1,0 +1,521 @@
+---
+title: "BeABee- Sound of Bees"
+subtitle: "Analysis of the Sound Data and Related Sensor Measurements"
+author: "Diren"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    code_folding: hide
+    number_sections: TRUE
+---
+
+# Introduction
+
+For our data meeting I prepared a data set with "mean" being the only measurement retained for all microphones. The mean frequency is calculated by using the amplitude as weight measure.
+
+The code for the preprocessing is described in [https://diediren.github.io/beabee/](https://diediren.github.io/beabee/). 
+The script results in data in the following format:
+
+```{r message=F, warning=F}
+require(lattice)
+require(ggplot2)
+source("cor.R")
+merged <-  read.csv("mergedmean.csv")
+library(knitr)
+kable(head(merged[15:18,], n = 3))
+```
+
+where mik.innen.a_1 is within the hive, positioned at the center of the floor,
+mik.innen.a_2 is outside of the hive
+miks.boden._1 is at the bottom-left side, within the hive
+miks.boden._2 is at the bottom-right side, within the hive
+miks.kanal._1 is on the right side of the entree canal
+miks.kanal._2 is on the left side of the entree canal.
+
+
+<!-- Mik innen-aussen: 	linker Kanal:  Referenzmikrophon innen, mitten am Boden unterhalb Gitter -->
+<!-- Rechter Kanal: Kontrollmikrophon ausserhalb des Versuchskastens, um Innen- und Aussengeräusche zu verifizieren. -->
+
+<!-- Miks boden:		linker Kanal: Mikrophon unterhalb Gitterboden auf linker Seite angeordnet. -->
+<!-- 		Rechter Kanal: Mikrophon unterhalb Gitterboden auf rechter Seite angeordnet. -->
+
+<!-- Miks Verbindungskanal:	linker Kanal:  Mikrophon links  -->
+<!-- 				rechter Kanal:  Mikrophon rechts  -->
+<!-- Beide Mikrophone sind etwa 12 cm von der Abflugöffnung entfernt. Aussengeräusche sind also auch noch gut hörbar. -->
+
+
+
+# Results
+## Exploratory Analysis
+### Outlier
+
+<!-- Looking at the mike in the bottom of the hive, there is only one value higher than 10 000 Hz. Investigations showed that no signal audible to humans was recorded during that time, so we assume that the audio file or the recording process was corrupted. We therefor remove the value. -->
+<!-- ```{r figs, fig.cap="Mean Frequency of mice within the hive"} -->
+<!--   plot(merged$timestamp, merged$miks.boden._1) -->
+<!-- ``` -->
+We decided to remove temperature measurements under 27.5 °C, as we suspect they only occured when the sensor was just installed.
+
+```{r}
+# remove value
+#nonn <- merged[!is.na(merged$mik.innen.a_1),]
+#merged <- merged[-3789,] 
+# nothing can be heard in the audio, let's remove it
+#hist(merged$TemperatureHive)
+merged <- merged[-which(merged$TemperatureHive<27.5),]
+```
+
+### Relationships 
+Let us just look at some of the relationships between measurements.
+We find many statistically significant relationships (significance level indicated by stars, 3 stars is the best).
+```{r fig1}
+pairs(merged[, 10:12], lower.panel=panel.smooth, upper.panel=panel.cor)
+```
+```{r}
+pairs(merged[, c(2, 4, 13, 15)], lower.panel=panel.smooth, upper.panel=panel.cor)
+```
+
+
+<!-- ```{r} -->
+<!-- vars <- c(2:7,10:18) -->
+<!-- for(i in 1:length(vars)){ -->
+<!--   print(names(merged)[vars[i]]) -->
+<!--   col <- merged[,vars[i]] -->
+<!--   whole <- col[!is.na(col)] -->
+<!--   if(length(col)>5000){ -->
+<!--     col <- col[runif(5000,1,length(col))] -->
+<!--   } -->
+<!--   print(shapiro.test(col)) -->
+<!--   hist(whole, main=names(merged)[vars[i]]) -->
+<!-- } -->
+<!-- ``` -->
+<!-- ```{r} -->
+<!-- names(merged) -->
+<!-- ``` -->
+
+
+Especcialy, let us look at the relationships between our dependent and the independent  variables.
+We converted Time and Date into numerical variables by matching each date/ time with an index.
+For some covariates is hard to say, if a linear relationship is justified, for example wind speed, which is not measured continously either.
+For others, like temperature outside, there is quite an obvious relation. 
+Looking at rain, it might be a good idea to transform this to a factor variable with a "rain" and a "no rain" option.
+
+
+<!-- # Pairs considered for the model: -->
+```{r}
+coefs <- 10:20
+ab <- 4
+merged$DateNum <- as.numeric(merged$Date)
+merged$TimeNum <- as.numeric(merged$Time)
+for(i in 1:length(coefs)){
+  plot(merged[,coefs[i]], merged[,ab], xlab=names(merged)[coefs[i]],
+       ylab=names(merged)[ab])
+}
+```
+
+## Multiple Linear Regression
+
+For some of the covariates it is hard to say, if there is a linear relationship. A Multiple Linear Regression therefore might no be the best choice and results are to be handled if caution, but it can give us as a good first impression.
+
+### Model selection
+
+We start with a model considering all covariates.
+
+```{r}
+audio <- lm(miks.boden._1 ~ DateNum+ TimeNum+ HumidityHive+ TemperatureHive+ WatervapourdenHive+ TemperatureOutside+  Barometer+ HumidyOutside+ Rain+ WindSpeed+ WindDir , data=merged)
+summary(audio)
+```
+Before we use this modell, we should check for collinearity between covariates. Collinearity makes the model unstable and the standard errors for the estimates might be very high.
+We can detect collinearity using *variance inflation factors* (VIFs):
+
+```{r}
+library(car)
+vif(audio)
+```
+
+There is no clear rule which tells us, if a VIF is good or to high. Usually, a VIF should not be higher than 5 or 10.
+We therefore decided to remove WatervapourdenHive from our model:
+
+```{r}
+audioVif <- lm(miks.boden._1 ~ DateNum+ TimeNum+ HumidityHive+ TemperatureHive+  TemperatureOutside+  Barometer+ HumidyOutside+ Rain+ WindSpeed+ WindDir, data=merged)
+summary(audioVif)
+```
+We can look at the VIFs again:
+```{r}
+vif(audioVif)
+```
+
+
+Now, the VIF values are looking good.
+
+Looking at AIC values, it does not matter if we keep WindDirection in the model. All other covariates seem to be significant! This can be seen from the summary output above.
+
+```{r}
+step.linearAllAIC<- step(audioVif, direction="both")
+audioVifStep <- lm(miks.boden._1 ~ DateNum + TimeNum + HumidityHive + TemperatureHive +
+    TemperatureOutside + Barometer + HumidyOutside + Rain + WindSpeed +
+    WindDir, data=merged)
+summary(audioVifStep)
+```
+
+It would be reasonable to have some interaction between Date and Time, as the timepoint of the sunrise changes every day.
+However, as long as Date is numeric, we do not find a significant relationship:
+```{r}
+# interaction not significant:
+inter <- lm(miks.boden._1 ~ DateNum + TimeNum + HumidityHive + TemperatureHive +
+    TemperatureOutside + Barometer + HumidyOutside + Rain + WindSpeed +
+    WindDir+ TimeNum:DateNum, data=merged)
+summary(inter)
+```
+Using Date as factor results in a significant relationship. Nevertheless, this is not very helpful for generalisations. There seem to be other factors then the duration of sunlight, which are not part of our data.
+
+```{r}
+# but with factor highly significant:
+interfac <- lm(miks.boden._1 ~ DateNum + TimeNum + HumidityHive + TemperatureHive +
+    TemperatureOutside + Barometer + HumidyOutside + Rain + WindSpeed +
+    WindDir+ TimeNum:Date, data=merged)
+ summary(interfac)
+```
+
+
+<!-- # Multiple Linear Regression Model -->
+<!-- ```{r} -->
+<!-- #with factors -->
+<!-- #audio <- lm(mean ~ DateNum+ TimeNum+ HumidityHive+ TemperatureHive+ WatervapourdenHive+ TemperatureOutside+  Barometer+ HumidyOutside+ Rain+ as.factor(WindSpeed)+ as.factor(WindDir), data=merged) -->
+<!-- # model with all covariates -->
+<!-- audio <- lm(miks.boden._1 ~ DateNum+ TimeNum+ HumidityHive+ TemperatureHive+ WatervapourdenHive+ TemperatureOutside+  Barometer+ HumidyOutside+ Rain+ WindSpeed+ WindDir , data=merged) -->
+<!-- summary(audio) -->
+<!-- # check vif and remove covariate -->
+<!-- library(car) -->
+<!-- vif(audio) -->
+<!-- audioVif <- lm(miks.boden._1 ~ DateNum+ TimeNum+ HumidityHive+ TemperatureHive+  TemperatureOutside+  Barometer+ HumidyOutside+ Rain+ WindSpeed+ WindDir, data=merged) -->
+<!-- summary(audioVif) -->
+<!-- vif(audioVif) -->
+<!-- # automatic selection, starting with all covariates -->
+<!-- step.linearAllAIC<- step(audio, direction="both") -->
+<!-- audioStep <- lm(miks.boden._1 ~ DateNum + TimeNum + HumidityHive + TemperatureHive + -->
+<!--     WatervapourdenHive + TemperatureOutside + Barometer + HumidyOutside + -->
+<!--     Rain + WindSpeed, data=merged) -->
+<!-- summary(audioStep) -->
+<!-- # automatic selection after vif removal -->
+<!-- step.linearAllAIC<- step(audioVif, direction="both") -->
+<!-- audioVifStep <- lm(miks.boden._1 ~ DateNum + TimeNum + HumidityHive + TemperatureHive + -->
+<!--     TemperatureOutside + Barometer + HumidyOutside + Rain + WindSpeed + -->
+<!--     WindDir, data=merged) -->
+<!-- summary(audioVifStep) -->
+<!-- # interaction not significant: -->
+<!-- inter <- lm(miks.boden._1 ~ DateNum + TimeNum + HumidityHive + TemperatureHive + -->
+<!--     TemperatureOutside + Barometer + HumidyOutside + Rain + WindSpeed + -->
+<!--     WindDir+ TimeNum:DateNum, data=merged) -->
+<!-- summary(inter) -->
+<!-- # but with factor highly significant: -->
+<!-- interfac <- lm(miks.boden._1 ~ DateNum + TimeNum + HumidityHive + TemperatureHive + -->
+<!--     TemperatureOutside + Barometer + HumidyOutside + Rain + WindSpeed + -->
+<!--     WindDir+ TimeNum:Date, data=merged) -->
+<!--  summary(interfac) -->
+<!-- ``` -->
+### Model assesment
+
+<!-- # Model assesment -->
+
+When performing a linear regression, we indirectly make some assumptions about the modelled data.
+* We assume that each relationship between one of the covariates and the dependent variable is linear.
+* We assume that the variance of the model errors is constant.
+* We assume that errors are independent.
+* We assume that the errors are normally distributed.
+
+#### Linearity
+
+This assumption seems to be fulfilled.
+It can be accessed via partial residual plots. The relationship should be indicated by a straight line.
+
+```{r}
+# Linearity
+#termplot(audioVifStep,se=T)
+termplot(audioVifStep,se=T,partial.resid=T)
+```
+
+
+#### Constant Error Variance
+
+This can be checked with the Breusch-Pagan test. The null hypothesis is, that the error variance is constant, while the alternative hypothesis is, that the variance varies with the fitted values/ a linear combination of the predictors.
+If the p-value is higher than 0.05, we do not reject the null hypothesis. So, there seems to be constant error variance.
+```{r}
+# Constant Error Variance
+require(car)
+ncvTest(audioVifStep)
+```
+
+#### Independence
+Usually, this is checked by looking at the errors of the model sorted in observation order.
+To make sure, that the data used for fitting the model was sorted, we sort the data and refit the model.
+Than we perform the Durbin-Watson test, where the null-hypothesis is, that we have independence.
+We can also look at auto-correlation.
+
+There clearly is some correlation. As Independence is a critical assumption, we should handle the results with caution. Some of the significant coefficents might actually be irrelevant. We will find a way to cater for the dependence with Generalised Least Squares.
+```{r}
+# Independence
+# sort:
+merged <- merged[order(merged$timestamp),]
+audioVifStep <- lm(miks.boden._1 ~ DateNum + TimeNum + HumidityHive + TemperatureHive +
+    TemperatureOutside + Barometer + HumidyOutside + Rain + WindSpeed +
+    WindDir, data=merged)
+plot(1:length(rstandard(audioVifStep)), rstandard(audioVifStep), xlab="Observation Order")
+durbinWatsonTest(audioVifStep)
+acf(residuals(audioVifStep))
+```
+
+#### Normality
+The errors seem to be normally distributed.
+```{r}
+# Normality
+hist(rstandard(audioVifStep), main="Model residuals")
+```
+
+
+
+<!-- ```{r} -->
+<!-- # Linearity -->
+<!-- termplot(audioVifStep,se=T) -->
+<!-- termplot(audioVifStep,se=T,partial.resid=T) -->
+<!-- # Constant Error Variance -->
+<!-- require(car) -->
+<!-- ncvTest(audioVifStep) -->
+<!-- # Independence -->
+<!-- # sort: -->
+<!-- merged <- merged[order(merged$timestamp),] -->
+<!-- audioVifStep <- lm(miks.boden._1 ~ DateNum + TimeNum + HumidityHive + TemperatureHive + -->
+<!--     TemperatureOutside + Barometer + HumidyOutside + Rain + WindSpeed + -->
+<!--     WindDir, data=merged) -->
+<!-- plot(1:length(rstandard(audioVifStep)), rstandard(audioVifStep), xlab="Observation Order") -->
+<!-- durbinWatsonTest(audioVifStep) -->
+<!-- acf(residuals(audioVifStep)) -->
+<!-- # -> not really given. Try with Polynomial Model -->
+
+<!-- # Normality -->
+<!-- hist(rstandard(audioVifStep), main="Model residuals") -->
+<!-- ``` -->
+
+## Regression using Generalised Least Squares
+
+It would have been nice to explain the variance of our data with a simple linear regression. As we added Date and Time in our model, we hoped to adress potential dependencies. However, we found that the errors are not independent. To make sure that we can trust our model, we refit it with a correlation-structure.
+
+### Model fitting
+
+Let's try a first order correlation structure.
+
+```{r}
+library(nlme)
+audioar1 <- gls(miks.boden._1 ~ DateNum + TimeNum + HumidityHive + TemperatureHive +
+    TemperatureOutside + Barometer + HumidyOutside + Rain + WindSpeed +
+    WindDir, data=merged, correlation=corAR1(form =~1), method="ML", na.action = na.omit)
+summary(audioar1)
+```
+
+In order to check our correlation structure, we can look at the ACF plots:
+
+```{r}
+AIC(audioVifStep, audioar1)
+#acf(residuals(audioVifStep), main="Residual Indep.")
+acf(residuals(audioar1, type="normalized"),
+main="Residuals for AR(1) model")
+```
+
+
+For our previous model we had correlations even for measurements with a distance of 10 time-points. This is much better with the new structure.
+
+### Model Assesment
+
+#### Independence
+
+Compared to the previous model, there is not such an obvious pattern in the residuals anymore.
+```{r}
+plot(1:length(residuals(audioar1, type="normalized")), residuals(audioar1, type="normalized"), xlab="Observation Order")
+```
+
+#### Normallity
+
+The residuals seem to be normally distributed:
+
+```{r}
+hist(residuals(audioar1, type = "normalized"), main="Model residuals", n=20)
+```
+
+
+## Summary of Results
+
+The p-values between the models differ quite a bit:
+
+```{r}
+res<- Anova(audioVifStep, type=3)
+res1 <- summary(audioar1)
+
+data.frame( "Standard Multiple Regression"= round(res$`Pr(>F)`, digits = 4)[1:10], 
+            "Generalised Linear Squares"=round(res1$tTable[,4], digits =4)[2:11],
+            row.names = row.names(res)[1:10] )
+```
+Meanwhile, the estimates tell us a similar story.
+Here is the coefficient table for the simple linear regression model:
+```{r}
+sum <- summary(audioVifStep)
+kable(round(sum$coefficients, digits = 4))
+```
+
+And here the table for the model with correlation structure:
+
+```{r}
+kable(round(res1$tTable, digits = 4))
+```
+
+# Discussion
+
+Let us focus on the results from the GLS model, as it seems to be more stable. It also improved the AIC value from 29 701 to 28 191.
+
+The correlation parameter of the model is 0.7, which means that the mean frequencies for two subsequent 10-minute periods have a correlation of 0.7, measurements 20 minutes apart are assumed to have a correlation of $0.7^2=0.49$ and so on. This is considered in the error term of the model.
+
+## Date
+
+Overall, the frequency seems to decrease in the time period betwen the 13th of April 2013 and the 7th of June 2013.
+Roughly speaking, the frequency decreases by 7 Hz every day.
+This can also be seen from the frequency plotted in timeorder. Only in the second half of June the frequency increases, however we do not have weather data for this period.
+```{r figs, fig.cap="Mean Frequency of mice within the hive"}
+  plot(merged$timestamp, merged$miks.boden._1)
+```
+
+## Humidity in the Hive
+
+A one-percent increase in humidity is related to an increase of the frequency by 0.9 Hz.
+
+## Temperature in the Hive
+
+An increase in temperature in the hive by 1 °C corresponds to a decrease of the frequency by 31 Hz.
+
+## Temperature Outside
+
+An increase in temperature outside of the hive by 1 °C corresponds to an increase of the frequency by 12.8 Hz.
+
+## Barometer
+
+A 1 hPa increase in air pressure is related to a 9.4 Hz frequency increase.
+
+## Rain
+
+1 mm of rain results in an increase of the mean frequency by 70 Hz.
+In fact, we rarely had rainfall higher than 0.2 mm.
+The people from BeABee spend some effort to build a roof over there hive.
+However, we cannot tell from our model, if the frequency increase occurs, because the the bees behave differently during rain, or if rainfall was recorded.
+
+
+
+
+
+
+
+<!-- # GLS -->
+<!-- ```{r} -->
+<!-- library(nlme) -->
+<!-- audioar1 <- gls(miks.boden._1 ~ DateNum + TimeNum + HumidityHive + TemperatureHive + -->
+<!--     TemperatureOutside + Barometer + HumidyOutside + Rain + WindSpeed + -->
+<!--     WindDir, data=merged, correlation=corAR1(form =~1), method="ML", na.action = na.omit) -->
+<!-- summary(audioar1) -->
+
+<!-- # audioar2 <- gls(miks.boden._1 ~ DateNum + TimeNum + HumidityHive + TemperatureHive + -->
+<!-- #     TemperatureOutside + Barometer + HumidyOutside + Rain + WindSpeed + -->
+<!-- #     WindDir, data=merged, correlation=corARMA(p = 2, q = 0, form =~1), method="ML", na.action = na.omit) -->
+<!-- # summary(audioar2) -->
+
+<!-- AIC(audioVifStep, audioar1) -->
+
+<!-- acf(residuals(audioVifStep), main="Residual Indep.") -->
+<!-- acf(residuals(audioar1, type="normalized"), -->
+<!-- main="Residuals for AR(1) model") -->
+<!-- ``` -->
+
+
+
+
+
+<!-- # Model assesment gls -->
+<!-- # noch mal neu machen -->
+<!-- ```{r} -->
+<!-- # Linearity -->
+<!-- termplot(audioar1,se=T) -->
+<!-- termplot(audioar1,se=T,partial.resid=T) -->
+<!-- # Constant Error Variance -->
+<!-- require(car) -->
+<!-- ncvTest(audioar1) -->
+<!-- # Independence -->
+<!-- # sort: -->
+<!-- merged <- merged[order(merged$timestamp),] -->
+<!-- audioVifStep <- lm(miks.boden._1 ~ DateNum + TimeNum + HumidityHive + TemperatureHive + -->
+<!--     TemperatureOutside + Barometer + HumidyOutside + Rain + WindSpeed + -->
+<!--     WindDir, data=merged) -->
+
+<!-- plot(1:length(residuals(audioar1, type="normalized")), residuals(audioar1, type="normalized"), xlab="Observation Order") -->
+<!-- durbinWatsonTest(audioVifStep) -->
+<!-- acf(residuals(audioVifStep)) -->
+<!-- # -> not really given. Try with Polynomial Model -->
+
+<!-- # Normality -->
+<!-- hist(rstandard(audioVifStep), main="Model residuals") -->
+<!-- ``` -->
+
+
+<!-- # brauchen wir das wirklich? -->
+<!-- # Polynomial Model -->
+<!-- ```{r} -->
+<!-- nonn <- merged[!is.na(merged$TimeNum),] -->
+<!-- audioPolym <- lm(miks.boden._1 ~ poly(DateNum,3)+ poly(TimeNum,3) + HumidityHive + TemperatureHive + -->
+<!--     TemperatureOutside + Barometer + HumidyOutside + Rain + WindSpeed +  -->
+<!--     WindDir, data=nonn, na.action = na.omit) -->
+<!-- summary(audioPolym) -->
+
+<!-- # kram: -->
+<!-- predicted.intervals <- predict(audio, nonn,interval='confidence', -->
+<!--                                level=0.95) -->
+<!-- library(jtools) -->
+<!-- effect_plot(audio, pred = TimeNum, interval = TRUE, plot.points = TRUE) -->
+<!-- effect_plot(audio, pred = DateNum, interval = TRUE, plot.points = TRUE) -->
+<!-- library(asbio) -->
+<!-- partial.resid.plot(audio, smooth.span = 0.8, lf.col = 2, sm.col = 4) -->
+<!-- plot(audio) -->
+<!-- ``` -->
+
+<!-- # Model assesment for polynomial model -->
+
+<!-- ```{r} -->
+<!-- # Linearity -->
+<!-- termplot(audioPolym,se=T) -->
+<!-- termplot(audioPolym,se=T,partial.resid=T) -->
+<!-- # Constant Error Variance -->
+<!-- require(car) -->
+<!-- ncvTest(audioPolym) -->
+<!-- # Problem??? -->
+<!-- # Independence -->
+<!-- # sort: -->
+<!-- merged <- merged[order(merged$timestamp),] -->
+<!-- nonn <- merged[!is.na(merged$TimeNum),] -->
+<!-- audioPolym <- lm(miks.boden._1 ~ poly(DateNum,3)+ poly(TimeNum,3) + HumidityHive + TemperatureHive + -->
+<!--     TemperatureOutside + Barometer + HumidyOutside + Rain + WindSpeed +  -->
+<!--     WindDir, data=nonn, na.action = na.omit) -->
+<!-- plot(1:length(rstandard(audioPolym)), rstandard(audioPolym), xlab="Observation Order") -->
+<!-- durbinWatsonTest(audioPolym) -->
+<!-- # -> not really given. Try with Polynomial Model -->
+
+<!-- # Normality -->
+<!-- hist(rstandard(audioPolym), main="Model residuals") -->
+<!-- ``` -->
+
+
+<!-- # Penalised Regression Splines -->
+<!-- ```{r} -->
+<!-- require(mgcv) -->
+<!-- nonn <- merged[!is.na(merged$mean),] -->
+<!-- # maybe we can smooth date next time -->
+<!-- pen <- gam(mean ~ DateNum+ s(TimeNum)+ s(TemperatureHive)+ s(TemperatureOutside, k = 3)+ s(Barometer)+ s(HumidyOutside)+ Rain+ WindSpeed+ s(WindDir), data=merged) -->
+<!-- summary(pen) -->
+<!-- #par(mfrow=c(2,2)) -->
+<!-- plot(pen, shade=T, all.terms = T, residuals = T) -->
+
+<!-- ``` -->
+
